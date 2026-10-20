@@ -1,6 +1,6 @@
 # Spring AI Catalog Assistant
 
-> An LLM-powered product and COA assistant for a live B2B chemicals e-commerce site, built as a Spring Boot microservice with **tool calling, hybrid vector search, RAG over COA PDFs, guardrails and an automated evaluation suite.**
+> An LLM-powered product and COA assistant for a live B2B chemicals e-commerce site, built as a Spring Boot microservice with **tool calling, hybrid vector search, RAG over COA PDFs, guardrails, RabbitMQ task queues, Kafka event streaming and an automated evaluation suite.**
 
 **Live on:** [kaarislabs.com](https://kaarislabs.com) <!-- add a demo GIF here once the widget is live -->
 
@@ -29,8 +29,12 @@ flowchart LR
     AI <--> LLM[LLM provider]
     AI <--> R[(Redis<br/>cache + vectors)]
     AI -->|read-only user| DB[(MySQL)]
-    SAP[SAP sync<br/>every 10 min] -->|product.updated| MQ[(RabbitMQ)]
+    SAP[SAP sync<br/>every 10 min] -->|product.updated| MQ[(RabbitMQ<br/>re-index tasks + DLQ)]
     MQ -->|re-index| AI
+    AI -->|chat.events| K[(Kafka)]
+    K --> C1[Analytics]
+    K --> C2[Demand signals]
+    K --> C3[Replay evals]
 ```
 
 The AI service is isolated from the store: slow or failed LLM calls never affect the website, and it scales and deploys independently.
@@ -67,6 +71,17 @@ sequenceDiagram
 **Guardrails in code, not just in the prompt.** Any price or percentage in a reply is checked against that turn's tool results. Unverified figures trigger a safe fallback.
 
 **Event-driven re-indexing.** The existing SAP sync publishes product updates to RabbitMQ; a consumer re-embeds only the changed products, with retries and a dead-letter queue.
+
+**RabbitMQ for tasks, Kafka for events.** The two brokers do different jobs:
+
+| | RabbitMQ | Kafka |
+|---|---|---|
+| Job here | Re-index tasks: "re-embed product 123" | Event stream: one event per chat turn (`chat.events`) |
+| After a message is read | Acknowledged and removed | Kept for the retention period, so it can be replayed |
+| Consumers | Competing workers share one queue | Independent consumer groups each read every event |
+| Failure handling | Retries and a dead-letter queue | Each group tracks its offset and can re-read from any point |
+
+Every chat turn publishes one event (question, tools called, results found, latency, tokens, cost, guardrail outcome), keyed by session id so a conversation stays ordered within a partition. Three consumer groups read it: **analytics** (daily metrics), **demand signals** (zero-result searches, i.e. products customers want that the store doesn't list) and **replay evals** (re-running real past questions against a new prompt or model before switching). The producer is asynchronous and never blocks the reply.
 
 ## Tools exposed to the LLM
 
@@ -113,6 +128,7 @@ src/main/java/.../assistant
 ├── rag/           # COA parsing, chunking, retrieval
 ├── guardrails/    # input validation and output verification
 ├── indexing/      # embedding pipeline + RabbitMQ consumers
+├── events/        # Kafka producer, consumer groups, replay tool
 ├── config/        # Spring AI, Redis, security, rate limits
 └── observability/ # per-turn logging and metrics
 src/test/java/...  # JUnit 5, Mockito, MockMvc tests + eval suite
@@ -122,7 +138,7 @@ src/test/java/...  # JUnit 5, Mockito, MockMvc tests + eval suite
 
 ```bash
 cp .env.example .env    # add your LLM API key and database settings
-docker compose up -d    # starts the service, Redis and RabbitMQ
+docker compose up -d    # starts the service, Redis, RabbitMQ and Kafka
 ```
 
 Then send a test question:
@@ -154,6 +170,12 @@ curl -N -X POST localhost:8080/api/chat \
 - [ ] Metrics dashboard and cost tracking
 - [ ] Evaluation suite in GitHub Actions CI
 
+**v4**
+- [ ] Single-node Kafka (KRaft mode) with the `chat.events` topic and an async producer
+- [ ] Analytics and demand-signal consumer groups
+- [ ] Replay tool for regression-testing prompt and model changes on real past questions
+- [ ] Integration tests with Testcontainers Kafka
+
 ## Tech stack
 
-Java 21 · Spring Boot 3 · Spring AI · Spring Data JPA / Hibernate · Spring Security (JWT) · Redis (vector search + cache) · RabbitMQ · MySQL · Apache PDFBox · Resilience4j · Bucket4j · JUnit 5 · Mockito · Docker · Nginx · GitHub Actions
+Java 21 · Spring Boot 3 · Spring AI · Spring Data JPA / Hibernate · Spring Security (JWT) · Redis (vector search + cache) · RabbitMQ · Apache Kafka · MySQL · Apache PDFBox · Resilience4j · Bucket4j · JUnit 5 · Mockito · Testcontainers · Docker · Nginx · GitHub Actions
