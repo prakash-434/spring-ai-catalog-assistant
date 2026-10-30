@@ -3,42 +3,60 @@ package com.kaarislabs.chatbot.chat;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 
-import org.springframework.stereotype.Component;
-import org.springframework.web.context.annotation.RequestScope;
+import org.springframework.ai.chat.model.ToolContext;
 
 /**
- * State of one /chat request, shared by the controller, the chat service and the tools. Tools run on the request
- * thread during the (non-streaming) model call, so the request scope reaches them.
+ * State of one chat turn, shared by the chat service and the tools. The turn runs on its own (virtual) thread, so the
+ * context travels to the tools in Spring AI's {@link ToolContext} rather than in a request scope. Tools of one turn
+ * run one after another, so no synchronisation is needed.
  */
-@Component
-@RequestScope
 public class ChatContext {
 
     public static final String DEFAULT_COUNTRY = "IN";
     public static final int MAX_TOOL_CALLS = 5;
 
-    private String sessionId;
-    private String countryCode = DEFAULT_COUNTRY;
+    /** Key of this object in the tool context map. */
+    static final String TOOL_CONTEXT_KEY = "kaaris.chatContext";
+
+    private final String sessionId;
+    private final String countryCode;
     private final Set<ChatAction> actions = new LinkedHashSet<>();
     private final List<String> toolsCalled = new ArrayList<>();
+    private Consumer<String> toolListener = tool -> { };
+
+    /** @param countryCode ISO-3166 alpha-2 code used for pricing; null means {@value #DEFAULT_COUNTRY} */
+    public ChatContext(String sessionId, String countryCode) {
+        this.sessionId = sessionId;
+        this.countryCode = countryCode == null ? DEFAULT_COUNTRY : countryCode;
+    }
+
+    /** The context the chat service put into the tool context of this turn. */
+    public static ChatContext from(ToolContext toolContext) {
+        Object context = toolContext == null ? null : toolContext.getContext().get(TOOL_CONTEXT_KEY);
+        return Objects.requireNonNull((ChatContext) context, "No ChatContext in the tool context");
+    }
+
+    /** For tests and the chat service: a tool context carrying this chat context. */
+    public ToolContext toToolContext() {
+        return new ToolContext(Map.of(TOOL_CONTEXT_KEY, this));
+    }
 
     public String sessionId() {
         return sessionId;
     }
 
-    public void setSessionId(String sessionId) {
-        this.sessionId = sessionId;
-    }
-
-    /** ISO-3166 alpha-2 code used for pricing; "IN" unless set. */
     public String countryCode() {
         return countryCode;
     }
 
-    public void setCountryCode(String countryCode) {
-        this.countryCode = countryCode;
+    /** Called with the tool name each time a tool starts, e.g. to stream a status line. */
+    public void onToolStart(Consumer<String> listener) {
+        this.toolListener = Objects.requireNonNull(listener);
     }
 
     /**
@@ -48,7 +66,11 @@ public class ChatContext {
      */
     public boolean beginToolCall(String tool) {
         toolsCalled.add(tool);
-        return toolsCalled.size() <= MAX_TOOL_CALLS;
+        boolean allowed = toolsCalled.size() <= MAX_TOOL_CALLS;
+        if (allowed) {
+            toolListener.accept(tool);
+        }
+        return allowed;
     }
 
     /** Adds a button; duplicates are kept once, in first-seen order. */

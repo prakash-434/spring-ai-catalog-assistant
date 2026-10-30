@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.ai.chat.model.ToolContext;
 
 import com.kaarislabs.chatbot.chat.ChatAction;
 import com.kaarislabs.chatbot.chat.ChatContext;
@@ -47,12 +48,14 @@ class ProductToolsTest {
     CatalogueService catalogueService;
 
     ChatContext context;
+    ToolContext toolContext;
     ProductTools tools;
 
     @BeforeEach
     void setUp() {
-        context = new ChatContext();
-        tools = new ProductTools(productService, catalogueService, context);
+        context = new ChatContext("s1", null);
+        toolContext = context.toToolContext();
+        tools = new ProductTools(productService, catalogueService);
     }
 
     static ProductSummary summary(String catNo) {
@@ -72,7 +75,7 @@ class ProductToolsTest {
         when(productService.search("BA044", null, 5))
                 .thenReturn(new ProductSearchResult("BA044", 1, List.of(summary("BA044"))));
 
-        Object result = tools.searchProducts(" BA044 ", null, 50);
+        Object result = tools.searchProducts(" BA044 ", null, 50, toolContext);
 
         verify(productService).search("BA044", null, 5);
         assertThat(result).isInstanceOf(ProductList.class);
@@ -87,7 +90,7 @@ class ProductToolsTest {
         when(productService.search("famotidine", "Impurity", 5))
                 .thenReturn(new ProductSearchResult("famotidine", 0, List.of()));
 
-        Object result = tools.searchProducts("famotidine", "Impurity", null);
+        Object result = tools.searchProducts("famotidine", "Impurity", null, toolContext);
 
         assertThat(((ProductList) result).total()).isZero();
         assertThat(context.actions()).isEmpty();
@@ -95,7 +98,7 @@ class ProductToolsTest {
 
     @Test
     void blankSearchReturnsAnErrorWithoutCallingTheService() {
-        Object result = tools.searchProducts("  ", null, 5);
+        Object result = tools.searchProducts("  ", null, 5, toolContext);
 
         assertThat(result).isInstanceOf(ToolError.class);
         assertThat(json(result)).contains("Please enter something to search for.");
@@ -106,7 +109,7 @@ class ProductToolsTest {
     void detailsRecordProductAndQuoteActionsAndHideLinksAndBrand() {
         when(productService.findByCatNo("BA044")).thenReturn(Optional.of(detail("BA044")));
 
-        Object result = tools.getProductDetails("BA044");
+        Object result = tools.getProductDetails("BA044", toolContext);
 
         assertThat(result).isInstanceOf(ProductInfo.class);
         assertThat(assertNoLinksOrBrand(result)).contains("308.42", ">98.0 atom% D (MS)", "\"found\":true");
@@ -117,7 +120,7 @@ class ProductToolsTest {
     void unknownProductReturnsNotFoundWithoutActions() {
         when(productService.findByCatNo("XX999")).thenReturn(Optional.empty());
 
-        Object result = tools.getProductDetails("XX999");
+        Object result = tools.getProductDetails("XX999", toolContext);
 
         assertThat(result).isInstanceOf(NotFound.class);
         assertThat(json(result)).contains("\"found\":false");
@@ -126,7 +129,7 @@ class ProductToolsTest {
 
     @Test
     void invalidCatNoIsRejectedBeforeTheService() {
-        Object result = tools.getProductDetails("BA044'--");
+        Object result = tools.getProductDetails("BA044'--", toolContext);
 
         assertThat(result).isInstanceOf(ToolError.class);
         verify(productService, never()).findByCatNo(anyString());
@@ -138,7 +141,7 @@ class ProductToolsTest {
                 new CategoryInfo("Impurity", 9000, "/categories/impurity"),
                 new CategoryInfo("Stable Isotopes", 800, "/categories/stable-isotopes")));
 
-        Object result = tools.listCategories();
+        Object result = tools.listCategories(toolContext);
 
         assertThat(assertNoLinksOrBrand(result)).contains("Impurity", "Stable Isotopes", "9000");
         assertThat(context.actions()).isEmpty();
@@ -149,8 +152,8 @@ class ProductToolsTest {
         when(catalogueService.apiFamilies("Impurity", "Famotidine", ProductTools.MAX_FAMILIES))
                 .thenReturn(new ApiFamilyList("Impurity", 1, List.of(new ApiFamilyInfo("Famotidine", 12))));
 
-        assertThat(json(tools.listApiFamilies("Impurity", "Famotidine"))).contains("Famotidine", "12");
-        assertThat(tools.listApiFamilies(" ", "Famotidine")).isInstanceOf(ToolError.class);
+        assertThat(json(tools.listApiFamilies("Impurity", "Famotidine", toolContext))).contains("Famotidine", "12");
+        assertThat(tools.listApiFamilies(" ", "Famotidine", toolContext)).isInstanceOf(ToolError.class);
         verify(catalogueService).apiFamilies("Impurity", "Famotidine", ProductTools.MAX_FAMILIES);
     }
 
@@ -160,7 +163,7 @@ class ProductToolsTest {
                 .thenReturn(new BrowseResult("Impurity", "Famotidine", "In Stock", 7,
                         List.of(summary("KL-01-00001"), summary("KL-01-00002"))));
 
-        Object result = tools.browseProducts("Impurity", "Famotidine", "in_stock", 99);
+        Object result = tools.browseProducts("Impurity", "Famotidine", "in_stock", 99, toolContext);
 
         assertThat(((ProductList) result).total()).isEqualTo(7);
         assertNoLinksOrBrand(result);
@@ -173,7 +176,7 @@ class ProductToolsTest {
         when(catalogueService.browse("Impurity", null, "soon", 5))
                 .thenThrow(new InvalidInputException("Unknown stock status."));
 
-        Object result = tools.browseProducts("Impurity", null, "soon", null);
+        Object result = tools.browseProducts("Impurity", null, "soon", null, toolContext);
 
         assertThat(json(result)).contains("Unknown stock status.");
     }
@@ -182,10 +185,10 @@ class ProductToolsTest {
     void sixthToolCallInATurnIsRefused() {
         when(productService.search("x", null, 5)).thenReturn(new ProductSearchResult("x", 0, List.of()));
         for (int i = 0; i < ChatContext.MAX_TOOL_CALLS; i++) {
-            tools.searchProducts("x", null, null);
+            tools.searchProducts("x", null, null, toolContext);
         }
 
-        Object result = tools.searchProducts("x", null, null);
+        Object result = tools.searchProducts("x", null, null, toolContext);
 
         assertThat(result).isEqualTo(ToolSupport.LIMIT_REACHED);
         verify(productService, times(ChatContext.MAX_TOOL_CALLS)).search("x", null, 5);

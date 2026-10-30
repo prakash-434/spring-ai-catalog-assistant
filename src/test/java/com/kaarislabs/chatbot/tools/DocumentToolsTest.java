@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.support.ToolCallbacks;
 
 import com.kaarislabs.chatbot.chat.ChatAction;
@@ -32,12 +33,14 @@ class DocumentToolsTest {
     DocumentService documentService;
 
     ChatContext context;
+    ToolContext toolContext;
     DocumentTools tools;
 
     @BeforeEach
     void setUp() {
-        context = new ChatContext();
-        tools = new DocumentTools(documentService, context);
+        context = new ChatContext("s1", null);
+        toolContext = context.toToolContext();
+        tools = new DocumentTools(documentService);
     }
 
     private static Map<DocumentType, Boolean> flags(DocumentType... available) {
@@ -56,7 +59,7 @@ class DocumentToolsTest {
         when(documentService.checkDocuments("KL-01-00012", "KLBF01053")).thenReturn(new DocumentAvailability(
                 "KL-01-00012", "KLBF01053", true, flags(DocumentType.COA, DocumentType.NMR), "/documents"));
 
-        Object result = tools.checkDocuments("KL-01-00012", "KLBF01053");
+        Object result = tools.checkDocuments("KL-01-00012", "KLBF01053", toolContext);
 
         Documents docs = (Documents) result;
         assertThat(docs.found()).isTrue();
@@ -72,7 +75,7 @@ class DocumentToolsTest {
         when(documentService.checkDocuments("KL-01-00012", "NOPE1")).thenReturn(
                 new DocumentAvailability("KL-01-00012", "NOPE1", false, flags(), "/documents"));
 
-        Documents docs = (Documents) tools.checkDocuments("KL-01-00012", "NOPE1");
+        Documents docs = (Documents) tools.checkDocuments("KL-01-00012", "NOPE1", toolContext);
 
         assertThat(docs.found()).isFalse();
         assertThat(docs.availableDocuments()).isEmpty();
@@ -84,7 +87,7 @@ class DocumentToolsTest {
         when(documentService.checkDocuments("KL-01-00012", "KR/001/23")).thenReturn(
                 new DocumentAvailability("KL-01-00012", "KR/001/23", false, flags(), "/documents"));
 
-        assertThat(tools.checkDocuments("KL-01-00012", "KR/001/23")).isInstanceOf(Documents.class);
+        assertThat(tools.checkDocuments("KL-01-00012", "KR/001/23", toolContext)).isInstanceOf(Documents.class);
     }
 
     /** The model repeats examples to customers, and batch numbers must never be suggested. */
@@ -98,8 +101,8 @@ class DocumentToolsTest {
 
     @Test
     void missingOrUnsafeBatchIsRejectedBeforeTheService() {
-        assertThat(tools.checkDocuments("KL-01-00012", null)).isInstanceOf(ToolError.class);
-        assertThat(tools.checkDocuments("KL-01-00012", "KLBF'--")).isInstanceOf(ToolError.class);
+        assertThat(tools.checkDocuments("KL-01-00012", null, toolContext)).isInstanceOf(ToolError.class);
+        assertThat(tools.checkDocuments("KL-01-00012", "KLBF'--", toolContext)).isInstanceOf(ToolError.class);
         verify(documentService, never()).checkDocuments(anyString(), anyString());
         assertThat(context.actions()).isEmpty();
     }

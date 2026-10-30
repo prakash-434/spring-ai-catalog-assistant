@@ -2,6 +2,7 @@ package com.kaarislabs.chatbot.tools;
 
 import java.util.Locale;
 
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -19,11 +20,9 @@ public class CompanyTools {
     static final String TOPICS = "contact, address, quote, complaint, documents, stock_list";
 
     private final CompanyProperties company;
-    private final ChatContext context;
 
-    public CompanyTools(CompanyProperties company, ChatContext context) {
+    public CompanyTools(CompanyProperties company) {
         this.company = company;
-        this.context = context;
     }
 
     @Tool(name = "getCompanyInfo", description = """
@@ -31,34 +30,36 @@ public class CompanyTools {
             email), address (postal address), quote (how to request a quote), complaint (how to raise a complaint), \
             documents (where to download COAs and other batch documents), stock_list (the current stock list).""")
     public Object getCompanyInfo(
-            @ToolParam(description = "One of: " + TOPICS + ".") String topic) {
+            @ToolParam(description = "One of: " + TOPICS + ".") String topic,
+            ToolContext toolContext) {
+        ChatContext context = ChatContext.from(toolContext);
         return ToolSupport.run(context, "getCompanyInfo", () -> {
             String t = topic == null ? "" : topic.trim().toLowerCase(Locale.ROOT);
             CompanyProperties.Links links = company.links();
             return switch (t) {
                 case "contact" -> {
-                    page(links.quote());
+                    page(context, links.quote());
                     yield info(t, null, company.phone(), company.email(), null);
                 }
                 case "address" -> info(t, company.address(), company.phone(), company.email(), null);
                 case "quote" -> {
-                    page(links.quote());
+                    page(context, links.quote());
                     yield info(t, null, company.phone(), company.email(),
                             "Customers request a quote with the contact form; mention the Cat No and pack size.");
                 }
                 case "complaint" -> {
-                    page(links.complaints());
+                    page(context, links.complaints());
                     yield info(t, null, company.phone(), company.email(),
                             "Complaints are raised with the complaint form.");
                 }
                 case "documents" -> {
-                    page(links.documents());
+                    page(context, links.documents());
                     yield info(t, null, null, company.email(),
                             "COAs and other batch documents are downloaded on the documents page with the item code"
                                     + " and the batch number from the vial label.");
                 }
                 case "stock_list" -> {
-                    page(links.stockList());
+                    page(context, links.stockList());
                     yield info(t, null, null, company.email(), "The current stock list is on the stock list page.");
                 }
                 default -> new ToolError("Unknown topic. Use one of: " + TOPICS + ".");
@@ -70,7 +71,7 @@ public class CompanyTools {
         return new CompanyInfo(topic, company.name(), address, phone, email, note);
     }
 
-    private void page(String path) {
+    private static void page(ChatContext context, String path) {
         if (path != null) {
             context.addAction(ChatAction.page(path));
         }

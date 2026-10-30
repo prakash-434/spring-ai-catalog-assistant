@@ -1,5 +1,6 @@
 package com.kaarislabs.chatbot.chat;
 
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -12,7 +13,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.model.tool.ToolCallLimitExceededException;
 import org.springframework.stereotype.Service;
 
-/** One chat turn: the model answers with the tools, memory is kept per session id. */
+/** One chat turn: the model answers with the tools (non-streaming), memory is kept per session id. */
 @Service
 public class ChatService {
 
@@ -22,15 +23,17 @@ public class ChatService {
             + " our sales team at sales@kaarislabs.com.";
 
     private final ChatClient chatClient;
-    private final ChatContext context;
 
-    public ChatService(ChatClient chatClient, ChatContext context) {
+    public ChatService(ChatClient chatClient) {
         this.chatClient = chatClient;
-        this.context = context;
     }
 
-    /** Expects a validated request; {@link ChatContext} must already hold the session id and country. */
-    public ChatReply chat(String message) {
+    /**
+     * Runs the whole tool-calling turn. The tools read and fill {@code context}.
+     *
+     * @param message a validated, stripped user message
+     */
+    public ChatReply chat(ChatContext context, String message) {
         long start = System.nanoTime();
         String reply;
         Usage usage = null;
@@ -38,6 +41,7 @@ public class ChatService {
             ChatResponse response = chatClient.prompt()
                     .user(message)
                     .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, context.sessionId()))
+                    .toolContext(Map.of(ChatContext.TOOL_CONTEXT_KEY, context))
                     .call()
                     .chatResponse();
             reply = text(response);

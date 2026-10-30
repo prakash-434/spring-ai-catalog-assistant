@@ -7,12 +7,11 @@ import jakarta.validation.constraints.Size;
 /**
  * Body of POST /chat.
  *
- * @param sessionId chosen by the website per visitor conversation; keys the chat memory
+ * @param sessionId a UUID chosen by the website per visitor conversation; keys the chat memory
  */
 public record ChatRequest(
         @NotBlank(message = "sessionId is required.")
-        @Size(max = 64, message = "sessionId can be at most 64 characters.")
-        @Pattern(regexp = "^[A-Za-z0-9_-]*$", message = "sessionId may contain only letters, digits, '-' and '_'.")
+        @Pattern(regexp = ChatRequest.UUID, message = "sessionId must be a UUID.")
         String sessionId,
 
         @NotBlank(message = "Please enter a message.")
@@ -20,4 +19,5 @@ public record ChatRequest(
         String message) {
 
     public static final int MAX_MESSAGE_LENGTH = 500;
+    static final String UUID = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
 }

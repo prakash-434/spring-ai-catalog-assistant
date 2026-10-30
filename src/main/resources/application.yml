@@ -33,7 +33,7 @@ spring:
       genai:
         api-key: ${GEMINI_API_KEY}
         chat:
-          model: ${CHATBOT_MODEL:gemini-2.5-flash}
+          model: ${CHATBOT_MODEL:gemini-3.5-flash}
           temperature: 0.2
     # ChatContext stops tools after 5 calls per turn and asks the model to answer; this is only a hard backstop
     # (the turn fails with ToolCallLimitExceededException) in case the model keeps calling anyway.
@@ -58,6 +58,15 @@ kaaris:
   chat:
     # Per model HTTP call (a turn with tool calls makes several).
     model-timeout: 30s
+    # Shared secret the website's server sends as X-Internal-Token. Empty = every chat request gets 401.
+    internal-token: ${CHATBOT_INTERNAL_TOKEN:}
+    # Chat memory: a session is forgotten after this long without messages.
+    session-idle-timeout: 30m
+    max-sessions: 10000
+  geo:
+    # Same service the website uses; the IP is appended, then ?fields=status,countryCode.
+    lookup-url: http://ip-api.com/json/
+    lookup-timeout: 2s
 
 management:
   endpoints:

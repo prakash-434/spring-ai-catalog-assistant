@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 
@@ -34,12 +35,14 @@ class PricingToolsTest {
     PricingService pricingService;
 
     ChatContext context;
+    ToolContext toolContext;
     PricingTools tools;
 
     @BeforeEach
     void setUp() {
-        context = new ChatContext();
-        tools = new PricingTools(pricingService, context);
+        context = new ChatContext("s1", null);
+        toolContext = context.toToolContext();
+        tools = new PricingTools(pricingService);
     }
 
     private static PricingResult usdPriced() {
@@ -51,10 +54,11 @@ class PricingToolsTest {
 
     @Test
     void usesTheCountryFromTheRequestContext() {
-        context.setCountryCode("US");
+        context = new ChatContext("s1", "US");
+        toolContext = context.toToolContext();
         when(pricingService.getPricing("BA072", "US")).thenReturn(usdPriced());
 
-        Object result = tools.getPackSizesAndPrice("BA072");
+        Object result = tools.getPackSizesAndPrice("BA072", toolContext);
 
         verify(pricingService).getPricing("BA072", "US");
         Pricing pricing = (Pricing) result;
@@ -71,7 +75,7 @@ class PricingToolsTest {
                 PricingStatus.CONTACT_FOR_PRICING, null,
                 List.of(new PackSizePrice("BA072", "5 mg", new BigDecimal("5"), "MG", null, null)), null));
 
-        Pricing pricing = (Pricing) tools.getPackSizesAndPrice("BA072");
+        Pricing pricing = (Pricing) tools.getPackSizesAndPrice("BA072", toolContext);
 
         verify(pricingService).getPricing("BA072", "IN");
         assertThat(pricing.status()).isEqualTo("CONTACT_FOR_PRICING");
@@ -84,7 +88,7 @@ class PricingToolsTest {
         when(pricingService.getPricing("BA044", "IN")).thenReturn(
                 new PricingResult("BA044", "IN", PricingStatus.CONTACT_FOR_QUOTE, null, List.of(), null));
 
-        Pricing pricing = (Pricing) tools.getPackSizesAndPrice("BA044");
+        Pricing pricing = (Pricing) tools.getPackSizesAndPrice("BA044", toolContext);
 
         assertThat(pricing.status()).isEqualTo("CONTACT_FOR_QUOTE");
         assertThat(context.actions()).containsExactly(ChatAction.quote("BA044"));
@@ -92,7 +96,7 @@ class PricingToolsTest {
 
     @Test
     void invalidCatNoIsRejectedBeforeTheService() {
-        assertThat(tools.getPackSizesAndPrice("BA072; DROP")).isInstanceOf(ToolError.class);
+        assertThat(tools.getPackSizesAndPrice("BA072; DROP", toolContext)).isInstanceOf(ToolError.class);
         verify(pricingService, never()).getPricing(anyString(), anyString());
     }
 
@@ -102,6 +106,7 @@ class PricingToolsTest {
 
         assertThat(callbacks).hasSize(1);
         String schema = callbacks[0].getToolDefinition().inputSchema();
-        assertThat(schema).contains("catNo").doesNotContainIgnoringCase("country");
+        assertThat(schema).contains("catNo").doesNotContainIgnoringCase("country")
+                .doesNotContainIgnoringCase("toolContext");
     }
 }

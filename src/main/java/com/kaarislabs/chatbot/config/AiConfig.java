@@ -3,17 +3,20 @@ package com.kaarislabs.chatbot.config;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.Resource;
 
+import com.kaarislabs.chatbot.chat.CaffeineChatMemoryRepository;
 import com.kaarislabs.chatbot.tools.CompanyTools;
 import com.kaarislabs.chatbot.tools.DocumentTools;
 import com.kaarislabs.chatbot.tools.PricingTools;
@@ -30,11 +33,18 @@ public class AiConfig {
     static final int MEMORY_WINDOW = 10;
 
     @Bean
-    ChatMemory chatMemory() {
+    ChatMemory chatMemory(@Value("${kaaris.chat.session-idle-timeout}") Duration idleTimeout,
+            @Value("${kaaris.chat.max-sessions}") long maxSessions) {
         return MessageWindowChatMemory.builder()
-                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .chatMemoryRepository(new CaffeineChatMemoryRepository(idleTimeout, maxSessions))
                 .maxMessages(MEMORY_WINDOW)
                 .build();
+    }
+
+    /** Runs chat turns, which block on the model and the database for seconds, on virtual threads. */
+    @Bean(destroyMethod = "close")
+    ExecutorService chatExecutor() {
+        return Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("chat-", 0).factory());
     }
 
     @Bean

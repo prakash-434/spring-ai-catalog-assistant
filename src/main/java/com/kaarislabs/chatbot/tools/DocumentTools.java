@@ -3,6 +3,7 @@ package com.kaarislabs.chatbot.tools;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -20,11 +21,9 @@ import com.kaarislabs.chatbot.tools.ToolResults.Documents;
 public class DocumentTools {
 
     private final DocumentService documentService;
-    private final ChatContext context;
 
-    public DocumentTools(DocumentService documentService, ChatContext context) {
+    public DocumentTools(DocumentService documentService) {
         this.documentService = documentService;
-        this.context = context;
     }
 
     @Tool(name = "checkDocuments", description = """
@@ -36,7 +35,9 @@ public class DocumentTools {
             @ToolParam(description = "Item code / Cat No, e.g. KL-01-00012.") String itemCode,
             // No example value: the model repeated a real batch number from here to a customer.
             @ToolParam(description = "Batch number exactly as the customer gave it from the vial label.")
-            String batchNumber) {
+            String batchNumber,
+            ToolContext toolContext) {
+        ChatContext context = ChatContext.from(toolContext);
         return ToolSupport.run(context, "checkDocuments", () -> {
             String item = InputValidator.requireItemCode(itemCode);
             String batch = InputValidator.requireBatchNumber(batchNumber);

@@ -1,5 +1,6 @@
 package com.kaarislabs.chatbot.tools;
 
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -17,11 +18,9 @@ import com.kaarislabs.chatbot.tools.ToolResults.Pricing;
 public class PricingTools {
 
     private final PricingService pricingService;
-    private final ChatContext context;
 
-    public PricingTools(PricingService pricingService, ChatContext context) {
+    public PricingTools(PricingService pricingService) {
         this.pricingService = pricingService;
-        this.context = context;
     }
 
     @Tool(name = "getPackSizesAndPrice", description = """
@@ -31,7 +30,9 @@ public class PricingTools {
             prices are not shown, tell the customer to contact sales or request a quote for pricing; \
             CONTACT_FOR_QUOTE = no pack sizes are listed, tell the customer to request a quote.""")
     public Object getPackSizesAndPrice(
-            @ToolParam(description = "The product's Cat No, e.g. BA072.") String catNo) {
+            @ToolParam(description = "The product's Cat No, e.g. BA072.") String catNo,
+            ToolContext toolContext) {
+        ChatContext context = ChatContext.from(toolContext);
         return ToolSupport.run(context, "getPackSizesAndPrice", () -> {
             String code = InputValidator.requireCatNo(catNo);
             PricingResult result = pricingService.getPricing(code, context.countryCode());
