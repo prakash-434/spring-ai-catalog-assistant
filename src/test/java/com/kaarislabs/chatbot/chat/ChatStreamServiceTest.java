@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -67,7 +68,8 @@ class ChatStreamServiceTest {
         var budget = TokenBudgetTestSupport.budget(1_000, clock);
         budget.record(budgetUsed);
         when(fallback.answer(anyString(), anyString())).thenReturn(FALLBACK_ANSWER);
-        return new ChatStreamService(chatService, guard, e -> false, budget, fallback, stats);
+        return new ChatStreamService(chatService, guard, e -> false, budget, fallback, stats,
+                new SessionEvidence(Duration.ofMinutes(30), 100));
     }
 
     private static ChatReply llmReply(String text) {

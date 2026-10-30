@@ -19,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
@@ -62,7 +63,7 @@ class ChatControllerTest {
         ChatStreamService streams = new ChatStreamService(chatService, (reply, message, ctx) -> Optional.empty(),
                 e -> false, TokenBudgetTestSupport.budget(1_000_000,
                         Clock.fixed(Instant.parse("2026-10-30T06:00:00Z"), ZoneOffset.UTC)),
-                fallback, stats);
+                fallback, stats, new SessionEvidence(Duration.ofMinutes(30), 100));
         ChatController controller = new ChatController(streams, new ChatContextFactory(countries, env),
                 new MessageRateLimiter(10, 100), stats, Runnable::run);
         return MockMvcBuilders.standaloneSetup(controller)

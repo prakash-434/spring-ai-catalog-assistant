@@ -72,15 +72,17 @@ public class ChatStreamService {
     private final TokenBudget budget;
     private final FallbackResponder fallback;
     private final ChatStats stats;
+    private final SessionEvidence evidence;
 
     public ChatStreamService(ChatService chatService, OutputGuard outputGuard, ModelErrorClassifier errors,
-            TokenBudget budget, FallbackResponder fallback, ChatStats stats) {
+            TokenBudget budget, FallbackResponder fallback, ChatStats stats, SessionEvidence evidence) {
         this.chatService = chatService;
         this.outputGuard = outputGuard;
         this.errors = errors;
         this.budget = budget;
         this.fallback = fallback;
         this.stats = stats;
+        this.evidence = evidence;
     }
 
     /**
@@ -88,6 +90,16 @@ public class ChatStreamService {
      * fallback. Throws only if the fallback itself fails (e.g. the database is down).
      */
     public ChatReply answer(ChatContext context, String message) {
+        try {
+            return decide(context, message);
+        } finally {
+            // Recorded after the guard has checked this turn, whatever the outcome: tool results are facts from
+            // the catalogue even when the reply was rejected or the model failed afterwards.
+            evidence.record(context.sessionId(), context.toolResults());
+        }
+    }
+
+    private ChatReply decide(ChatContext context, String message) {
         long start = System.nanoTime();
         if (budget.exhausted()) {
             return fallback(context, message, BUDGET, false, start);

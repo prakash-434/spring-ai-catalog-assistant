@@ -15,18 +15,23 @@ import org.springframework.stereotype.Component;
 
 import com.kaarislabs.chatbot.chat.ChatContext;
 import com.kaarislabs.chatbot.chat.OutputGuard;
+import com.kaarislabs.chatbot.chat.SessionEvidence;
 import com.kaarislabs.chatbot.tools.ToolResults;
 
 /**
- * Blocks replies that state a price, percentage or CAS number the tools did not return in this turn:
+ * Blocks replies that state a price, percentage or CAS number no tool returned. The evidence is this turn's tool
+ * results plus those of earlier turns in the same session ({@link SessionEvidence}), so a follow-up the model answers
+ * from memory passes when the fact came from a tool earlier:
  * <ul>
  * <li>currency amounts ($, USD, ₹, INR, Rs) must equal a pack price of a PRICED pricing result, compared as numbers
- * ("$1,055.00" = "1055 USD"); with no PRICED result in the turn, no amount is allowed at all;</li>
+ * ("$1,055.00" = "1055 USD"), and the most recent pricing result of the session must itself be PRICED; with no
+ * pricing result, or a latest one that says contact for pricing/quote, no amount is allowed at all;</li>
  * <li>percentages ("98%", "&gt; 95%", "98.0 atom%") must occur in the tool results;</li>
  * <li>CAS-shaped strings must occur in the tool results or in the customer's own message (so "we have nothing for
  * CAS 123-45-6" is not blocked).</li>
  * </ul>
- * Other numbers, such as molecular weights, are not checked.
+ * Only tool results count as evidence, never earlier reply text. Other numbers, such as molecular weights, are not
+ * checked.
  */
 @Component
 public class ToolResultOutputGuard implements OutputGuard {
@@ -47,9 +52,18 @@ public class ToolResultOutputGuard implements OutputGuard {
 
     private static final DefaultToolCallResultConverter CONVERTER = new DefaultToolCallResultConverter();
 
+    private final SessionEvidence evidence;
+
+    public ToolResultOutputGuard(SessionEvidence evidence) {
+        this.evidence = evidence;
+    }
+
     @Override
     public Optional<Violation> check(String reply, String userMessage, ChatContext context) {
-        List<Object> results = context.toolResults();
+        // Oldest first, this turn last, so the last pricing result found is the most recent one.
+        List<Object> results = new ArrayList<>();
+        evidence.earlierTurns(context.sessionId()).forEach(results::addAll);
+        results.addAll(context.toolResults());
         String toolText = results.stream()
                 .map(r -> CONVERTER.convert(r, r.getClass()))
                 .collect(Collectors.joining("\n"));
@@ -65,12 +79,16 @@ public class ToolResultOutputGuard implements OutputGuard {
             return Optional.empty();
         }
         Set<BigDecimal> allowed = new HashSet<>();
+        ToolResults.Pricing latest = null;
         for (Object r : results) {
-            if (r instanceof ToolResults.Pricing p && "PRICED".equals(p.status())) {
-                p.packSizes().forEach(pack -> number(pack.price()).ifPresent(allowed::add));
+            if (r instanceof ToolResults.Pricing p) {
+                latest = p;
+                if ("PRICED".equals(p.status())) {
+                    p.packSizes().forEach(pack -> number(pack.price()).ifPresent(allowed::add));
+                }
             }
         }
-        if (allowed.isEmpty()) {
+        if (latest == null || !"PRICED".equals(latest.status()) || allowed.isEmpty()) {
             return Optional.of(new Violation("price_without_pricing", amounts.getFirst()));
         }
         for (String amount : amounts) {

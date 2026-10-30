@@ -2,6 +2,7 @@ package com.kaarislabs.chatbot.guard;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
@@ -11,11 +12,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import com.kaarislabs.chatbot.chat.ChatContext;
 import com.kaarislabs.chatbot.chat.OutputGuard.Violation;
+import com.kaarislabs.chatbot.chat.SessionEvidence;
 import com.kaarislabs.chatbot.tools.ToolResults;
 
 class ToolResultOutputGuardTest {
 
-    final ToolResultOutputGuard guard = new ToolResultOutputGuard();
+    final SessionEvidence evidence = new SessionEvidence(Duration.ofMinutes(30), 100);
+    final ToolResultOutputGuard guard = new ToolResultOutputGuard(evidence);
     final ChatContext context = new ChatContext("s1", "US");
 
     static ToolResults.Pricing usdPricing() {
@@ -105,6 +108,40 @@ class ToolResultOutputGuardTest {
     @Test
     void molecularWeightAndOtherPlainNumbersPass() {
         assertThat(check("Molecular weight: 308.42 g/mol, 5 mg and 10 mg packs, 2-3 days.", ba044())).isEmpty();
+    }
+
+    /** Turn 1 read BA044's details; turn 2 answers "what is its purity?" from memory, without a tool call. */
+    @Test
+    void followUpFromMemoryUsesEarlierToolResultsOfTheSession() {
+        evidence.record("s1", List.of(ba044()));
+        ChatContext turn2 = new ChatContext("s1", "US");
+
+        assertThat(guard.check("Its purity is >98.0 atom% D (MS).", "what is its purity?", turn2)).isEmpty();
+        assertThat(guard.check("Its purity is 99.5%.", "what is its purity?", turn2))
+                .contains(new Violation("unknown_percentage", "99.5%"));
+        assertThat(guard.check("CAS 1781417-68-2.", "and the CAS?", turn2)).isEmpty();
+    }
+
+    @Test
+    void evidenceOfAnotherSessionDoesNotCount() {
+        evidence.record("other-session", List.of(ba044()));
+
+        assertThat(guard.check("Its purity is >98.0 atom% D (MS).", "purity?", new ChatContext("s1", "US")))
+                .map(Violation::rule).contains("unknown_percentage");
+    }
+
+    @Test
+    void earlierPricesPassOnlyWhileTheLatestPricingResultAllowsThem() {
+        evidence.record("s1", List.of(usdPricing()));
+        ChatContext turn2 = new ChatContext("s1", "US");
+        assertThat(guard.check("As I said, 5 mg is $345.00.", "repeat the price", turn2)).isEmpty();
+
+        // A later pricing result that says "contact" switches prices off, even for figures seen earlier.
+        evidence.record("s1", List.of(new ToolResults.Pricing("BA044", "CONTACT_FOR_QUOTE", null, List.of(), null,
+                "No pack sizes or prices are listed.")));
+        ChatContext turn3 = new ChatContext("s1", "US");
+        assertThat(guard.check("BA072 5 mg is $345.00.", "and BA072 again?", turn3))
+                .map(Violation::rule).contains("price_without_pricing");
     }
 
     @Test
