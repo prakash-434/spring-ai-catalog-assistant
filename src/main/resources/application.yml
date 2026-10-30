@@ -63,6 +63,17 @@ kaaris:
     # Chat memory: a session is forgotten after this long without messages.
     session-idle-timeout: 30m
     max-sessions: 10000
+  rate-limit:
+    # Messages per visitor (trusted client IP, else remote address).
+    per-minute: ${CHATBOT_RATE_LIMIT_PER_MINUTE:10}
+    per-day: ${CHATBOT_RATE_LIMIT_PER_DAY:100}
+  budget:
+    # Model tokens (input + output) per day for all visitors; afterwards every turn uses the fallback until midnight
+    # Asia/Kolkata.
+    daily-tokens: ${CHATBOT_DAILY_TOKEN_BUDGET:2000000}
+    # USD per million tokens, only for the estimated cost in the logs.
+    input-price-per-million: ${CHATBOT_INPUT_PRICE_PER_MILLION:1.50}
+    output-price-per-million: ${CHATBOT_OUTPUT_PRICE_PER_MILLION:9.00}
   geo:
     # Same service the website uses; the IP is appended, then ?fields=status,countryCode.
     lookup-url: http://ip-api.com/json/

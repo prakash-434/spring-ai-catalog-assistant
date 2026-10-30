@@ -9,6 +9,7 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import com.kaarislabs.chatbot.geo.CountryResolver;
+import com.kaarislabs.chatbot.geo.IpAddresses;
 import com.kaarislabs.chatbot.security.InternalTokenFilter;
 
 /**
@@ -25,8 +26,15 @@ public class ChatContextFactory {
 
     private static final Pattern COUNTRY = Pattern.compile("^[A-Za-z]{2}$");
 
-    /** What a request says about where the visitor is; either value may be null. */
-    public record Origin(String trustedClientIp, String debugCountry) {
+    /**
+     * What a request says about the visitor.
+     *
+     * @param trustedClientIp X-Client-IP from a token-validated request, else null
+     * @param debugCountry    the dev-only country override, else null
+     * @param visitorKey      who the rate limits apply to: the trusted client IP if it is a valid IP literal,
+     *                        otherwise the connection's remote address
+     */
+    public record Origin(String trustedClientIp, String debugCountry, String visitorKey) {
     }
 
     private final CountryResolver countries;
@@ -45,7 +53,8 @@ public class ChatContextFactory {
         } else {
             debug = null;
         }
-        return new Origin(ip, debug);
+        String visitorKey = IpAddresses.normalized(ip).orElse(request.getRemoteAddr());
+        return new Origin(ip, debug, visitorKey);
     }
 
     public ChatContext create(String sessionId, Origin origin) {

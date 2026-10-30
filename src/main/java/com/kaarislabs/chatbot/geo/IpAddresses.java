@@ -8,7 +8,7 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /** Strict parsing of client IP strings; nothing that is not a plain IPv4/IPv6 literal ever reaches a URL. */
-final class IpAddresses {
+public final class IpAddresses {
 
     private static final int MAX_LENGTH = 45;
     private static final String OCTET = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
@@ -25,6 +25,11 @@ final class IpAddresses {
      */
     static Optional<String> publicAddress(String value) {
         return parse(value).filter(IpAddresses::isPublic).map(InetAddress::getHostAddress);
+    }
+
+    /** The normalised form of any valid IPv4/IPv6 literal (public or not); empty for anything else. */
+    public static Optional<String> normalized(String value) {
+        return parse(value).map(InetAddress::getHostAddress);
     }
 
     static Optional<InetAddress> parse(String value) {

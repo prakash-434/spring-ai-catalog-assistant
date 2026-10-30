@@ -28,7 +28,9 @@ final class ToolSupport {
             return LIMIT_REACHED;
         }
         try {
-            return body.get();
+            Object result = body.get();
+            context.recordToolResult(result);
+            return result;
         } catch (InvalidInputException e) {
             return new ToolError(e.getMessage());
         } catch (DataAccessException e) {

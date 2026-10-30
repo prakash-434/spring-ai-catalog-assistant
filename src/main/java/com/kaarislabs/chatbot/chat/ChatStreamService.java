@@ -2,8 +2,11 @@ package com.kaarislabs.chatbot.chat;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import org.slf4j.Logger;
@@ -11,10 +14,18 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.stereotype.Service;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.kaarislabs.chatbot.fallback.FallbackResponder;
+import com.kaarislabs.chatbot.limits.TokenBudget;
+import com.kaarislabs.chatbot.stats.ChatStats;
+
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+
 /**
- * Streams one chat turn as events: "status" while tools run, then the guarded reply as "token" chunks, one "action"
- * per button and "done"; or a single "error". The model call itself is not streamed: the whole reply must exist
- * before {@link OutputGuard} can check it.
+ * One chat turn. {@link #answer} decides between the model and the templated fallback (budget used up, circuit open,
+ * model failure, or a reply the {@link OutputGuard} rejects); {@link #stream} writes the result as events: "status"
+ * while tools run, the reply as "token" chunks, one "action" per button and "done"; or a single "error". The model
+ * call itself is not streamed: the whole reply must exist before the guard can check it.
  */
 @Service
 public class ChatStreamService {
@@ -23,8 +34,17 @@ public class ChatStreamService {
 
     static final int CHUNK_SIZE = 20;
     static final String RATE_LIMITED = "I'm getting a lot of questions right now, please try again in a minute.";
+    static final String VISITOR_RATE_LIMITED =
+            "You're sending messages quickly, please wait a moment and try again.";
     static final String FAILED = "Something went wrong, please try again or contact sales@kaarislabs.com.";
     static final String DEFAULT_STATUS = "Looking that up…";
+
+    /** Why a turn used the fallback; also the keys of the daily stats. */
+    static final String BUDGET = "budget_exceeded";
+    static final String CIRCUIT_OPEN = "circuit_open";
+    static final String MODEL_RATE_LIMITED = "model_rate_limited";
+    static final String MODEL_ERROR = "model_error";
+    static final String GUARD_VIOLATION = "guard_violation";
 
     private static final Map<String, String> STATUS = Map.of(
             "searchProducts", "Searching products…",
@@ -38,7 +58,9 @@ public class ChatStreamService {
     record Token(String text) {
     }
 
-    record Done(long latencyMs) {
+    /** @param mode {@link ChatReply#LLM} or {@link ChatReply#FALLBACK}, so the widget can show a note */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record Done(long latencyMs, String mode) {
     }
 
     record ErrorMessage(String message) {
@@ -47,18 +69,68 @@ public class ChatStreamService {
     private final ChatService chatService;
     private final OutputGuard outputGuard;
     private final ModelErrorClassifier errors;
+    private final TokenBudget budget;
+    private final FallbackResponder fallback;
+    private final ChatStats stats;
 
-    public ChatStreamService(ChatService chatService, OutputGuard outputGuard, ModelErrorClassifier errors) {
+    public ChatStreamService(ChatService chatService, OutputGuard outputGuard, ModelErrorClassifier errors,
+            TokenBudget budget, FallbackResponder fallback, ChatStats stats) {
         this.chatService = chatService;
         this.outputGuard = outputGuard;
         this.errors = errors;
+        this.budget = budget;
+        this.fallback = fallback;
+        this.stats = stats;
     }
 
-    /** The guarded, non-streamed reply. */
+    /**
+     * The reply the customer gets: the model's if it was called, succeeded and passed the guard, otherwise the
+     * fallback. Throws only if the fallback itself fails (e.g. the database is down).
+     */
     public ChatReply answer(ChatContext context, String message) {
-        ChatReply reply = chatService.chat(context, message);
-        return new ChatReply(outputGuard.apply(reply.reply(), context), reply.actions(), reply.toolsCalled(),
-                reply.latencyMs());
+        long start = System.nanoTime();
+        if (budget.exhausted()) {
+            return fallback(context, message, BUDGET, false, start);
+        }
+        ChatReply reply;
+        try {
+            reply = chatService.chat(context, message);
+        } catch (CallNotPermittedException e) {
+            return fallback(context, message, CIRCUIT_OPEN, false, start);
+        } catch (RuntimeException e) {
+            boolean rateLimited = errors.isRateLimited(e);
+            Throwable root = NestedExceptionUtils.getMostSpecificCause(e);
+            log.warn("Model call failed, using fallback: session={} rateLimited={} {} (cause {}: {})",
+                    context.sessionId(), rateLimited, e.getClass().getName(), root.getClass().getName(),
+                    root.getMessage());
+            return fallback(context, message, rateLimited ? MODEL_RATE_LIMITED : MODEL_ERROR, false, start);
+        } finally {
+            for (int i = 0; i < context.zeroResultSearches(); i++) {
+                stats.zeroResultSearch();
+            }
+        }
+        Optional<OutputGuard.Violation> violation = outputGuard.check(reply.reply(), message, context);
+        if (violation.isPresent()) {
+            stats.guardViolation();
+            log.warn("guard_violation rule={} token=\"{}\" session={}", violation.get().rule(),
+                    violation.get().token(), context.sessionId());
+            return fallback(context, message, GUARD_VIOLATION, true, start);
+        }
+        return reply;
+    }
+
+    private ChatReply fallback(ChatContext context, String message, String reason, boolean keepTurnActions,
+            long start) {
+        stats.fallback(reason);
+        FallbackResponder.Answer answer = fallback.answer(message, context.countryCode());
+        Set<ChatAction> actions = new LinkedHashSet<>();
+        if (keepTurnActions) {
+            actions.addAll(context.actions());
+        }
+        actions.addAll(answer.actions());
+        log.info("Fallback turn: session={} reason={}", context.sessionId(), reason);
+        return new ChatReply(answer.text(), List.copyOf(actions), context.toolsCalled(),
+                (System.nanoTime() - start) / 1_000_000, ChatReply.FALLBACK);
     }
 
     /** Runs the turn and writes its events; always completes the sink. */
@@ -72,23 +144,32 @@ public class ChatStreamService {
             for (ChatAction action : reply.actions()) {
                 sink.send("action", action);
             }
-            sink.send("done", new Done(reply.latencyMs()));
+            sink.send("done", new Done(reply.latencyMs(), reply.mode()));
         } catch (IOException e) {
             log.debug("Client left during chat turn: session={}", context.sessionId());
         } catch (RuntimeException e) {
-            boolean rateLimited = errors.isRateLimited(e);
             Throwable root = NestedExceptionUtils.getMostSpecificCause(e);
-            log.error("Chat turn failed: session={} country={} tools={} rateLimited={} {}: {} (cause {}: {})",
-                    context.sessionId(), context.countryCode(), context.toolsCalled(), rateLimited,
+            log.error("Chat turn failed: session={} country={} tools={} {}: {} (cause {}: {})",
+                    context.sessionId(), context.countryCode(), context.toolsCalled(),
                     e.getClass().getName(), e.getMessage(), root.getClass().getName(), root.getMessage());
             try {
-                sink.send("error", new ErrorMessage(rateLimited ? RATE_LIMITED : FAILED));
+                sink.send("error", new ErrorMessage(FAILED));
             } catch (IOException | RuntimeException ignored) {
                 // The client is gone or the stream already timed out; nothing more to tell it.
             }
         } finally {
             sink.complete();
         }
+    }
+
+    /** Answers a visitor over the message limit: one "error" event, no model or database call. */
+    static void rejectRateLimited(ChatEventSink sink) {
+        try {
+            sink.send("error", new ErrorMessage(VISITOR_RATE_LIMITED));
+        } catch (IOException | RuntimeException ignored) {
+            // The client is gone.
+        }
+        sink.complete();
     }
 
     static String statusLabel(String tool) {

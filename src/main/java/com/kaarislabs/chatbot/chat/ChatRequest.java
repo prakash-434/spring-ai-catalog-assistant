@@ -4,6 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import com.kaarislabs.chatbot.common.InputSanitizer;
+
 /**
  * Body of POST /chat.
  *
@@ -19,5 +21,10 @@ public record ChatRequest(
         String message) {
 
     public static final int MAX_MESSAGE_LENGTH = 500;
+
+    /** The message is cleaned before validation, so the empty and length checks apply to the cleaned text. */
+    public ChatRequest {
+        message = InputSanitizer.clean(message);
+    }
     static final String UUID = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
 }

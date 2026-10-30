@@ -60,6 +60,7 @@ public class ProductTools {
             ProductSearchResult result = productService.search(q, category, productLimit(limit));
             if (result.total() == 0) {
                 log.info("Search with no results: query=\"{}\" category=\"{}\"", q, category);
+                context.zeroResultSearch();
             }
             return productList(context, result.total(), result.items());
         });

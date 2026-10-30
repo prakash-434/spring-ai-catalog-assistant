@@ -27,6 +27,8 @@ public class ChatContext {
     private final String countryCode;
     private final Set<ChatAction> actions = new LinkedHashSet<>();
     private final List<String> toolsCalled = new ArrayList<>();
+    private final List<Object> toolResults = new ArrayList<>();
+    private int zeroResultSearches;
     private Consumer<String> toolListener = tool -> { };
 
     /** @param countryCode ISO-3166 alpha-2 code used for pricing; null means {@value #DEFAULT_COUNTRY} */
@@ -71,6 +73,24 @@ public class ChatContext {
             toolListener.accept(tool);
         }
         return allowed;
+    }
+
+    public void zeroResultSearch() {
+        zeroResultSearches++;
+    }
+
+    public int zeroResultSearches() {
+        return zeroResultSearches;
+    }
+
+    /** Keeps what a tool returned to the model, for the output guard. */
+    public void recordToolResult(Object result) {
+        toolResults.add(result);
+    }
+
+    /** Everything the tools returned to the model in this turn, in call order. */
+    public List<Object> toolResults() {
+        return List.copyOf(toolResults);
     }
 
     /** Adds a button; duplicates are kept once, in first-seen order. */
