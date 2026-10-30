@@ -1,0 +1,14 @@
+# Contact details from the website footer (frontend/components/layout/Footer.tsx).
+# Page links are relative to the website and match the routes in frontend/app/.
+kaaris:
+  company:
+    name: Kaaris Research Labs Private Limited
+    website: https://kaarislabs.com
+    address: Plot No. 177, Phase 2, IDA Mallapur, Hyderabad-500076, Telangana, India
+    phone: +91 95155 17891
+    email: sales@kaarislabs.com
+    links:
+      quote: /contact
+      documents: /documents
+      complaints: /complaints
+      stock-list: /stock-list

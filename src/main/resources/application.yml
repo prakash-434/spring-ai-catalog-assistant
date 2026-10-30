@@ -1,0 +1,43 @@
+server:
+  address: 127.0.0.1
+  port: 8090
+
+spring:
+  application:
+    name: kaaris-chatbot
+  config:
+    import:
+      - classpath:excluded-categories.yml
+      - classpath:company-info.yml
+
+  # Credentials come only from the environment (read-only SQL login "kaaris_chatbot").
+  datasource:
+    url: ${CHATBOT_DB_URL}
+    username: ${CHATBOT_DB_USER}
+    password: ${CHATBOT_DB_PASSWORD}
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    hikari:
+      pool-name: chatbot-db
+      maximum-pool-size: 5
+      read-only: true
+      # Milliseconds: HikariConfig takes a plain long, so "5s" does not bind.
+      connection-timeout: 5000
+
+  jdbc:
+    template:
+      query-timeout: 10s
+
+  cache:
+    type: caffeine
+    cache-names: categories,apiFamilies
+    caffeine:
+      spec: maximumSize=500,expireAfterWrite=10m
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never

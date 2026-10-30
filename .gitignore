@@ -1,0 +1,13 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# Real environment files must never be committed; .env.example is the template.
+.env
+.env.*
+!.env.example
+*.env.ps1
+
+.idea/
+*.iml
+.vscode/
+*.log

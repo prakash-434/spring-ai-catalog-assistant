@@ -1,0 +1,32 @@
+# OITB.ItmsGrpNam groups, in two lists:
+#
+# excluded-categories: copied exactly from EXCLUDED_CATEGORIES in the website's
+#   frontend/lib/repository/category/categoryrepository.ts. Hidden from category browsing only
+#   (category list, API families, browse). Their U_WebsiteDisplay = 'YES' products are still found by search and by
+#   catalogue-number lookup.
+#
+# non-product-categories: groups that hold no chemical products (lab equipment, glassware). Hidden everywhere,
+#   including search, catalogue-number lookup and pricing. Each must also be in excluded-categories.
+kaaris:
+  catalogue:
+    excluded-categories:
+      - Assets
+      - BP Standards
+      - Building Blocks
+      - Consumable Material
+      - EP Standards
+      - Fine chemicals
+      - Intermediates
+      - IP Standards
+      - Items
+      - Metabolites
+      - NMR solvents
+      - Reagents
+      - Secondary Standards
+      - Solvents
+      - Stable Isotopes Reagents
+      - Trading
+      - USP Standards
+    non-product-categories:
+      - Assets
+      - Consumable Material
