@@ -28,6 +28,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.http.MediaType;
 import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.web.servlet.MockMvc;
@@ -63,7 +65,9 @@ class ChatControllerTest {
         ChatStreamService streams = new ChatStreamService(chatService, (reply, message, ctx) -> Optional.empty(),
                 e -> false, TokenBudgetTestSupport.budget(1_000_000,
                         Clock.fixed(Instant.parse("2026-10-30T06:00:00Z"), ZoneOffset.UTC)),
-                fallback, stats, new SessionEvidence(Duration.ofMinutes(30), 100));
+                fallback, stats, new SessionEvidence(Duration.ofMinutes(30), 100),
+                new ConversationMemory(MessageWindowChatMemory.builder()
+                        .chatMemoryRepository(new InMemoryChatMemoryRepository()).maxMessages(10).build()));
         ChatController controller = new ChatController(streams, new ChatContextFactory(countries, env),
                 new MessageRateLimiter(10, 100), stats, Runnable::run);
         return MockMvcBuilders.standaloneSetup(controller)

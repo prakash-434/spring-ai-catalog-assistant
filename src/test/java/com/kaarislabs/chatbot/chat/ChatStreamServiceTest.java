@@ -20,6 +20,12 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 
 import com.kaarislabs.chatbot.fallback.FallbackResponder;
 import com.kaarislabs.chatbot.limits.TokenBudgetTestSupport;
@@ -60,6 +66,8 @@ class ChatStreamServiceTest {
     final FallbackResponder fallback = mock(FallbackResponder.class);
     final ChatStats stats = new ChatStats(new BigDecimal("1.50"), new BigDecimal("9.00"));
     final ChatContext context = new ChatContext("s1", "IN");
+    final ChatMemory memory = MessageWindowChatMemory.builder()
+            .chatMemoryRepository(new InMemoryChatMemoryRepository()).maxMessages(10).build();
     OutputGuard guard = (reply, message, ctx) -> Optional.empty();
     long budgetUsed;
 
@@ -69,7 +77,7 @@ class ChatStreamServiceTest {
         budget.record(budgetUsed);
         when(fallback.answer(anyString(), anyString())).thenReturn(FALLBACK_ANSWER);
         return new ChatStreamService(chatService, guard, e -> false, budget, fallback, stats,
-                new SessionEvidence(Duration.ofMinutes(30), 100));
+                new SessionEvidence(Duration.ofMinutes(30), 100), new ConversationMemory(memory));
     }
 
     private static ChatReply llmReply(String text) {
@@ -93,6 +101,8 @@ class ChatStreamServiceTest {
     void guardViolationSendsTheFallbackAndKeepsTheTurnsActions() {
         when(chatService.chat(eq(context), any())).thenAnswer(inv -> {
             context.addAction(ChatAction.quote("BA072"));
+            // What the memory advisor stores during a real model turn.
+            memory.add("s1", List.of(new UserMessage("price of BA044"), new AssistantMessage("It costs $99.00.")));
             return llmReply("It costs $99.00.");
         });
         guard = (reply, message, ctx) -> Optional.of(new OutputGuard.Violation("unknown_price", "$99.00"));
@@ -106,6 +116,8 @@ class ChatStreamServiceTest {
         assertThat(sink.data.getLast()).isInstanceOf(ChatStreamService.Done.class)
                 .extracting("mode").isEqualTo(ChatReply.FALLBACK);
         assertThat(stats.snapshotAndReset("test")).contains("guardViolations=1", "guard_violation=1");
+        assertThat(memory.get("s1")).extracting(Message::getText)
+                .containsExactly("price of BA044", FALLBACK_ANSWER.text());
     }
 
     @Test

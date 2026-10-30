@@ -73,9 +73,11 @@ public class ChatStreamService {
     private final FallbackResponder fallback;
     private final ChatStats stats;
     private final SessionEvidence evidence;
+    private final ConversationMemory memory;
 
     public ChatStreamService(ChatService chatService, OutputGuard outputGuard, ModelErrorClassifier errors,
-            TokenBudget budget, FallbackResponder fallback, ChatStats stats, SessionEvidence evidence) {
+            TokenBudget budget, FallbackResponder fallback, ChatStats stats, SessionEvidence evidence,
+            ConversationMemory memory) {
         this.chatService = chatService;
         this.outputGuard = outputGuard;
         this.errors = errors;
@@ -83,6 +85,7 @@ public class ChatStreamService {
         this.fallback = fallback;
         this.stats = stats;
         this.evidence = evidence;
+        this.memory = memory;
     }
 
     /**
@@ -126,7 +129,10 @@ public class ChatStreamService {
             stats.guardViolation();
             log.warn("guard_violation rule={} token=\"{}\" session={}", violation.get().rule(),
                     violation.get().token(), context.sessionId());
-            return fallback(context, message, GUARD_VIOLATION, true, start);
+            ChatReply shown = fallback(context, message, GUARD_VIOLATION, true, start);
+            // The rejected reply is already in the chat memory; the model must not build on it next turn.
+            memory.replaceLastReply(context.sessionId(), shown.reply());
+            return shown;
         }
         return reply;
     }
