@@ -31,7 +31,9 @@ import com.kaarislabs.chatbot.service.dto.ProductSummary;
  */
 @Tag("integration")
 @EnabledIfEnvironmentVariable(named = "CHATBOT_DB_URL", matches = ".+")
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+// The data layer never calls the model, so a placeholder key keeps these tests independent of GEMINI_API_KEY.
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE,
+        properties = "spring.ai.google.genai.api-key=not-used-by-data-tests")
 class DataLayerIntegrationTest {
 
     /** SQL Server error 229: "The SELECT permission was denied on the object ...". */
