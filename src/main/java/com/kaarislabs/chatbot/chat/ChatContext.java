@@ -29,6 +29,9 @@ public class ChatContext {
     private final List<String> toolsCalled = new ArrayList<>();
     private final List<Object> toolResults = new ArrayList<>();
     private int zeroResultSearches;
+    private long inputTokens;
+    private long outputTokens;
+    private String fallbackReason;
     private Consumer<String> toolListener = tool -> { };
 
     /** @param countryCode ISO-3166 alpha-2 code used for pricing; null means {@value #DEFAULT_COUNTRY} */
@@ -73,6 +76,29 @@ public class ChatContext {
             toolListener.accept(tool);
         }
         return allowed;
+    }
+
+    /** Model tokens used by this turn, as reported by the model. */
+    public void recordTokens(long input, long output) {
+        inputTokens += input;
+        outputTokens += output;
+    }
+
+    public long inputTokens() {
+        return inputTokens;
+    }
+
+    public long outputTokens() {
+        return outputTokens;
+    }
+
+    /** Why this turn used the templated fallback; null when the model answered. */
+    public String fallbackReason() {
+        return fallbackReason;
+    }
+
+    void setFallbackReason(String reason) {
+        this.fallbackReason = reason;
     }
 
     public void zeroResultSearch() {

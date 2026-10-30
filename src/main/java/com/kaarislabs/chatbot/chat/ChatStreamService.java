@@ -40,11 +40,11 @@ public class ChatStreamService {
     static final String DEFAULT_STATUS = "Looking that up…";
 
     /** Why a turn used the fallback; also the keys of the daily stats. */
-    static final String BUDGET = "budget_exceeded";
-    static final String CIRCUIT_OPEN = "circuit_open";
-    static final String MODEL_RATE_LIMITED = "model_rate_limited";
-    static final String MODEL_ERROR = "model_error";
-    static final String GUARD_VIOLATION = "guard_violation";
+    public static final String BUDGET = "budget_exceeded";
+    public static final String CIRCUIT_OPEN = "circuit_open";
+    public static final String MODEL_RATE_LIMITED = "model_rate_limited";
+    public static final String MODEL_ERROR = "model_error";
+    public static final String GUARD_VIOLATION = "guard_violation";
 
     private static final Map<String, String> STATUS = Map.of(
             "searchProducts", "Searching products…",
@@ -140,6 +140,7 @@ public class ChatStreamService {
     private ChatReply fallback(ChatContext context, String message, String reason, boolean keepTurnActions,
             long start) {
         stats.fallback(reason);
+        context.setFallbackReason(reason);
         FallbackResponder.Answer answer = fallback.answer(message, context.countryCode());
         Set<ChatAction> actions = new LinkedHashSet<>();
         if (keepTurnActions) {

@@ -1,0 +1,94 @@
+{
+  "model" : "gemini-3.5-flash-lite",
+  "generatedAt" : "2026-10-31T01:02:17.578425600+05:30",
+  "casesTotal" : 40,
+  "casesDone" : 40,
+  "casesPending" : 0,
+  "casesPassed" : 40,
+  "answerAccuracyPct" : 100.0,
+  "turnsScoredForTools" : 34,
+  "toolSelectionAccuracyPct" : 100.0,
+  "pricingRuleViolations" : 0,
+  "guardViolations" : 0,
+  "fallbackTurns" : 0,
+  "fallbackRatePct" : 0.0,
+  "turns" : 43,
+  "avgLatencyMs" : 3271,
+  "p95LatencyMs" : 6883,
+  "avgTokensPerTurn" : 4039,
+  "avgCostPerMessageUsd" : 0.006763,
+  "categories" : [ {
+    "category" : "lookup_catno",
+    "cases" : 4,
+    "done" : 4,
+    "passed" : 4,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "lookup_cas",
+    "cases" : 3,
+    "done" : 3,
+    "passed" : 3,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "lookup_name",
+    "cases" : 4,
+    "done" : 4,
+    "passed" : 4,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "details_followup",
+    "cases" : 4,
+    "done" : 4,
+    "passed" : 4,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "stock",
+    "cases" : 3,
+    "done" : 3,
+    "passed" : 3,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "pricing",
+    "cases" : 6,
+    "done" : 6,
+    "passed" : 6,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "coa",
+    "cases" : 4,
+    "done" : 4,
+    "passed" : 4,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "browse",
+    "cases" : 3,
+    "done" : 3,
+    "passed" : 3,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "company",
+    "cases" : 2,
+    "done" : 2,
+    "passed" : 2,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "out_of_scope",
+    "cases" : 4,
+    "done" : 4,
+    "passed" : 4,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "injection",
+    "cases" : 2,
+    "done" : 2,
+    "passed" : 2,
+    "accuracyPct" : 100.0
+  }, {
+    "category" : "non_english",
+    "cases" : 1,
+    "done" : 1,
+    "passed" : 1,
+    "accuracyPct" : 100.0
+  } ],
+  "pendingCaseIds" : [ ]
+}

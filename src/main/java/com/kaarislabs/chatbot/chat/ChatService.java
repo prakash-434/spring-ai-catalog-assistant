@@ -71,6 +71,7 @@ public class ChatService {
         long input = usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens();
         long output = outputTokens(usage, input);
         budget.record(input + output);
+        context.recordTokens(input, output);
         stats.llmTurn(input, output);
 
         log.info("Chat turn: session={} country={} tools={} latencyMs={} inputTokens={} outputTokens={}"
