@@ -52,7 +52,7 @@ jobs:
           KUBECONFIG_DATA: ${{ secrets.KUBECONFIG_B64 }}
         run: |
           echo "$KUBECONFIG_DATA" | base64 -d > kubeconfig && export KUBECONFIG=$PWD/kubeconfig
-          kubectl apply -f deploy/k8s/service-hpa-config.yaml
+          kubectl apply -f deploy/k8s/service-hpa-config.yaml -f deploy/k8s/ingress.yaml
           sed "s|IMAGE_PLACEHOLDER|$IMAGE|" deploy/k8s/deployment.yaml | kubectl apply -f -
           kubectl -n kaaris rollout status deployment/assistant --timeout=180s \
             || { kubectl -n kaaris rollout undo deployment/assistant; exit 1; }

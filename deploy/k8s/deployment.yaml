@@ -18,6 +18,8 @@ spec:
       labels: { app: assistant }
     spec:
       terminationGracePeriodSeconds: 45   # let in-flight SSE replies finish
+      imagePullSecrets:
+        - name: ecr-pull                  # docker-registry secret for the private ECR repository
       containers:
         - name: assistant
           image: IMAGE_PLACEHOLDER        # replaced by the deploy workflow (ECR image tagged with the commit SHA)

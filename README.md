@@ -164,6 +164,7 @@ flowchart LR
 | **Readiness probe** | "Can it take traffic?" Failing → **removed from the Service**, not restarted | `/actuator/health/readiness` |
 | **Resources** | `requests` = what the scheduler reserves; `limits` = the hard cap | 250m / 512Mi → 1 CPU / 768Mi |
 | **Service** | A stable DNS name + virtual IP that load-balances across **Ready** pods only | `ClusterIP`, port 80 → 8090 |
+| **Ingress** | HTTP entry point from outside the cluster to the Service | Traefik on k3s (`ingress.yaml`); ALB controller on EKS |
 | **HPA** | Adds or removes pods based on load | 2–6 pods at 70% CPU, 5-min scale-down window |
 | **ConfigMap / Secret** | Non-secret settings / credentials injected as env vars | Secrets are created on the cluster, never committed |
 | **preStop + grace period** | On shutdown, wait 10 s so the Service stops routing here, then allow 45 s for open SSE replies | avoids cutting off a reply mid-stream |
@@ -192,6 +193,110 @@ Spring Boot exposes the `liveness` and `readiness` health groups automatically w
 - **Every push / PR:** `./mvnw test`. DB and eval tests skip themselves when their credentials aren't set, so CI runs the unit and web tests.
 - **Deploy (manual trigger):** `needs: test` → build the image → push to ECR → `kubectl apply` → wait for the rollout → **auto-undo on failure**.
 - All secrets (`AWS_DEPLOY_ROLE_ARN`, `ECR_REGISTRY`, `KUBECONFIG_B64`, app secrets) live in GitHub / cluster secrets, **never in the repo**.
+
+---
+
+## Deploy it on AWS, step by step (k3s on EC2)
+
+About one evening. Each step says **what you're learning**, because that's what interviewers ask about.
+
+> **Cost:** k3s + a Spring Boot pod needs about 2 GB RAM, so a free-tier `t3.micro` (1 GB) is too small. Use a **`t3.small`** (2 GB, roughly $0.02/hour in Mumbai) and **stop it when you're done**. First, set a **billing alarm** (Billing → Budgets → $5).
+
+### 1. Launch the EC2 instance
+- EC2 → Launch instance → **Ubuntu 24.04**, `t3.small`, 20 GB disk, region **ap-south-1**, and create a key pair.
+- **Security group** (an instance-level firewall):
+
+  | Port | Source | Why |
+  |---|---|---|
+  | 22 | **My IP** | SSH |
+  | 80 | 0.0.0.0/0 | the Ingress (HTTP) |
+  | 6443 | **My IP** | the Kubernetes API, for `kubectl` from your laptop |
+
+- **IAM role → EC2:** create a role with **`AmazonEC2ContainerRegistryReadOnly`** and attach it to the instance.
+  *Learning:* this is an **instance profile**. Code on the box gets temporary credentials from the metadata service, so no access keys are ever stored on the server.
+
+### 2. Install Kubernetes (k3s)
+```bash
+ssh -i key.pem ubuntu@<PUBLIC_IP>
+curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--tls-san <PUBLIC_IP>" sh -
+sudo k3s kubectl get nodes          # STATUS Ready
+sudo k3s kubectl get pods -A        # coredns, traefik, metrics-server, local-path-provisioner
+```
+*Learning:* k3s is a full, certified Kubernetes in one binary. It bundles **Traefik** (ingress controller), **metrics-server** (needed by the HPA) and **CoreDNS** (service names like `assistant.kaaris.svc`). `--tls-san` adds the public IP to the API server's certificate, so `kubectl` from your laptop trusts it.
+
+**kubectl from your laptop:** copy `/etc/rancher/k3s/k3s.yaml` to `~/.kube/config`, then replace `127.0.0.1` with `<PUBLIC_IP>`. Run `kubectl get nodes` to check.
+
+### 3. Push the image to ECR
+```bash
+aws ecr create-repository --repository-name kaaris-assistant --region ap-south-1
+REG=<ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com
+aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin $REG
+docker build -t $REG/kaaris-assistant:v1 .
+docker push $REG/kaaris-assistant:v1
+```
+*Learning:* the image is tagged with a **version** (in CI, the commit SHA), never `latest`, so every running pod maps to an exact build and rollback is just the previous tag.
+
+### 4. The database (RDS)
+- RDS → Create → **SQL Server Express**, `db.t3.micro` (free-tier eligible), **not publicly accessible**, same VPC.
+- RDS security group: allow **1433 only from the EC2 instance's security group** (not from an IP range).
+- Load the catalogue schema + data, then create the **read-only login** the app expects:
+```sql
+CREATE LOGIN kaaris_chatbot WITH PASSWORD = '<strong password>';
+USE <catalogue_db>;
+CREATE USER kaaris_chatbot FOR LOGIN kaaris_chatbot;
+ALTER ROLE db_datareader ADD MEMBER kaaris_chatbot;   -- SELECT only: even a bug can't write
+```
+*Learning:* security groups can reference **other security groups**, so "only the app servers can reach the DB" holds even when IPs change. The DB itself enforces read-only, not just the code.
+
+### 5. Secrets and the pull secret
+```bash
+kubectl apply -f deploy/k8s/service-hpa-config.yaml        # namespace, Service, HPA, ConfigMap
+kubectl -n kaaris create secret generic assistant-secrets --from-env-file=.env
+kubectl -n kaaris create secret docker-registry ecr-pull \
+  --docker-server=$REG --docker-username=AWS \
+  --docker-password="$(aws ecr get-login-password --region ap-south-1)"
+```
+`.env` holds `CHATBOT_DB_URL=jdbc:sqlserver://<rds-endpoint>:1433;databaseName=<db>;encrypt=true;trustServerCertificate=true`, `CHATBOT_DB_USER`, `CHATBOT_DB_PASSWORD`, `GEMINI_API_KEY` and `CHATBOT_INTERNAL_TOKEN`.
+
+*Learning:* a Kubernetes **Secret is only base64-encoded, not encrypted**. Anyone with read access to the namespace can decode it. In production you'd use **AWS Secrets Manager** with the External Secrets Operator, and RBAC. The ECR token **expires after 12 hours**, so a real setup refreshes it with a CronJob or the ECR credential provider.
+
+### 6. Deploy and watch it come up
+```bash
+sed "s|IMAGE_PLACEHOLDER|$REG/kaaris-assistant:v1|" deploy/k8s/deployment.yaml | kubectl apply -f -
+kubectl apply -f deploy/k8s/ingress.yaml
+kubectl -n kaaris get pods -w                     # ContainerCreating → Running → READY 1/1
+kubectl -n kaaris describe pod <name>             # events: pulled image, probes
+kubectl -n kaaris logs -f deploy/assistant
+```
+*Learning:* the pod shows `0/1` READY until the **readiness probe** passes, and only then does the Service send it traffic. If it's stuck, `describe` shows why: `ImagePullBackOff` (pull secret or tag), `CrashLoopBackOff` (bad config, read the logs), or `OOMKilled` (memory limit too low).
+
+### 7. Test it
+```bash
+curl -N -X POST http://<PUBLIC_IP>/chat \
+  -H "Content-Type: application/json" -H "X-Internal-Token: <CHATBOT_INTERNAL_TOKEN>" \
+  -d '{"sessionId":"3f2b8a1e-5c4d-4e6f-9a7b-1c2d3e4f5a6b","message":"Do you have BA044?"}'
+```
+You'll see the **SSE events** stream: `status`, `token` …, `action`, `done`.
+
+### 8. Try the things interviewers ask about
+| Try | Command | What you see |
+|---|---|---|
+| **Self-healing** | `kubectl -n kaaris delete pod <name>` | The Deployment starts a new pod straight away |
+| **Rolling update** | push `:v2`, then `kubectl -n kaaris set image deploy/assistant assistant=$REG/kaaris-assistant:v2` | New pod Ready → old pod terminated, one at a time |
+| **Rollback** | `kubectl -n kaaris rollout undo deploy/assistant` | Back to `v1` |
+| **Autoscaling** | `kubectl -n kaaris get hpa -w` while running a load test (`hey -n 2000 -c 50 ...`) | Replicas go 2 → 3+ when CPU passes 70%, and scale down after 5 min |
+| **Resource usage** | `kubectl top pods -n kaaris` | Real CPU / memory against the requests and limits |
+
+### 9. Logs and an alarm in CloudWatch
+- Install the **CloudWatch agent** on the instance (add `CloudWatchAgentServerPolicy` to the instance role). Configure it to ship `/var/log/containers/*assistant*.log` to a log group `/kaaris/assistant`.
+- Create a **metric filter** on `"ERROR"` and an **alarm** when there are more than 5 in 5 minutes, sent to email through SNS.
+
+*Learning:* pod logs on the node are lost when the node goes, so you ship them off the box. Alarms turn logs into alerts.
+
+### 10. Clean up
+Stop or terminate the EC2 instance, delete the RDS instance (skip the final snapshot for a demo), and delete the ECR images.
+
+**After this, you can honestly say:** *"I deployed it to a k3s Kubernetes cluster on EC2: image in ECR, DB on RDS behind security-group rules, secrets as Kubernetes Secrets, liveness and readiness probes, an HPA, rolling updates and rollbacks, and logs in CloudWatch."* And you'll know what `ImagePullBackOff` looks like.
 
 ---
 
