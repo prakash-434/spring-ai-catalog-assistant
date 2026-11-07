@@ -16,17 +16,17 @@
 
 ```mermaid
 flowchart LR
-    B[Browser<br/>chat widget] -->|HTTPS| NG[Nginx]
-    NG --> WEB[Next.js store<br/>JWT login]
-    WEB -->|X-Internal-Token<br/>+ customer id| AI[assistant-service<br/>Spring Boot + Spring AI]
-    AI <-->|prompt + tool schemas| LLM[LLM<br/>Gemini]
-    AI -->|read-only login| DB[(Catalogue DB)]
-    AI <-->|top-k chunks| VS[(Redis<br/>COA vectors)]
-    SAP[SAP sync job] -->|product / COA changed| MQ[(RabbitMQ<br/>+ DLQ)]
-    MQ --> IDX[Re-index worker] --> VS
-    AI -->|chat.events| K[(Kafka)]
-    K --> AN[Analytics consumer]
-    K --> RP[Replay-eval consumer]
+    B["Browser<br/>chat widget"] -->|"HTTPS"| NG["Nginx"]
+    NG --> WEB["Next.js store<br/>JWT login"]
+    WEB -->|"X-Internal-Token<br/>+ customer id"| AI["assistant-service<br/>Spring Boot + Spring AI"]
+    AI <-->|"prompt + tool schemas"| LLM["LLM<br/>Gemini"]
+    AI -->|"read-only login"| DB[("Catalogue DB")]
+    AI <-->|"top-k chunks"| VS[("Redis<br/>COA vectors")]
+    SAP["SAP sync job"] -->|"product / COA changed"| MQ[("RabbitMQ<br/>+ DLQ")]
+    MQ --> IDX["Re-index worker"] --> VS
+    AI -->|"chat.events"| K[("Kafka")]
+    K --> AN["Analytics consumer"]
+    K --> RP["Replay-eval consumer"]
 ```
 
 **Why a separate service?** A slow or failing LLM must never slow down checkout. The assistant scales, deploys and fails on its own, and the store only sees a chat widget.
@@ -131,19 +131,19 @@ Everything needed is in this repo: [`Dockerfile`](Dockerfile), [`deploy/k8s/`](d
 
 ```mermaid
 flowchart LR
-    DEV[push / PR] --> T[GitHub Actions<br/>./mvnw test]
-    T -->|manual deploy| B[docker build<br/>multi-stage]
-    B --> ECR[(Amazon ECR<br/>image:commit-sha)]
-    ECR --> K[kubectl apply<br/>rolling update]
-    subgraph AWS [AWS · ap-south-1]
-      subgraph EC2 [Kubernetes cluster on EC2]
-        ING[Ingress / Nginx] --> SVC[Service<br/>assistant:80]
-        SVC --> P1[Pod] & P2[Pod] & P3[Pod ...]
-        HPA[HPA 2-6 pods<br/>CPU 70%] -.-> P1
+    DEV["push / PR"] --> T["GitHub Actions<br/>./mvnw test"]
+    T -->|"manual deploy"| B["docker build<br/>multi-stage"]
+    B --> ECR[("Amazon ECR<br/>image:commit-sha")]
+    ECR --> K["kubectl apply<br/>rolling update"]
+    subgraph AWS ["AWS · ap-south-1"]
+      subgraph EC2 ["Kubernetes cluster on EC2"]
+        ING["Ingress / Nginx"] --> SVC["Service<br/>assistant:80"]
+        SVC --> P1["Pod"] & P2["Pod"] & P3["Pod ..."]
+        HPA["HPA 2-6 pods<br/>CPU 70%"] -.-> P1
       end
-      P1 --> RDS[(RDS<br/>catalogue DB)]
-      P1 --> S3[(S3<br/>COA PDFs)]
-      P1 -.logs.-> CW[CloudWatch<br/>logs + alarms]
+      P1 --> RDS[("RDS<br/>catalogue DB")]
+      P1 --> S3[("S3<br/>COA PDFs")]
+      P1 -.logs.-> CW["CloudWatch<br/>logs + alarms"]
     end
     K --> EC2
 ```
