@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kaaris
+---
+# Stable virtual IP + DNS name (assistant.kaaris.svc) in front of the Ready pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: assistant
+  namespace: kaaris
+spec:
+  type: ClusterIP
+  selector: { app: assistant }
+  ports:
+    - port: 80
+      targetPort: 8090
+---
+# Adds pods when average CPU passes 70% of the request, between 2 and 6 replicas
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: assistant
+  namespace: kaaris
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: assistant }
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300   # avoid flapping after a short burst
+---
+# Non-secret settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: assistant-config
+  namespace: kaaris
+data:
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+  CHATBOT_MODEL: gemini-2.5-flash
+  CHATBOT_RATE_LIMIT_PER_MINUTE: "10"
+  CHATBOT_RATE_LIMIT_PER_DAY: "100"
+# Secrets (CHATBOT_DB_URL, CHATBOT_DB_USER, CHATBOT_DB_PASSWORD, GEMINI_API_KEY, CHATBOT_INTERNAL_TOKEN) are never
+# committed. Create them on the cluster:
+#   kubectl -n kaaris create secret generic assistant-secrets --from-env-file=.env

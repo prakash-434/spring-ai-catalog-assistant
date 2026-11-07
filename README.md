@@ -1,6 +1,6 @@
 # Spring AI Catalog Assistant
 
-> An LLM-powered product and COA (Certificate of Analysis) assistant for a live B2B chemicals store, [kaarislabs.com](https://kaarislabs.com). It runs as an isolated Spring Boot microservice using **Spring AI tool calling**, **RAG over COA PDFs**, **output guardrails**, **RabbitMQ re-indexing**, **Kafka chat events** and an **evaluation suite in CI**, and it is deployed on **AWS with Kubernetes**.
+> An LLM-powered product and COA (Certificate of Analysis) assistant for a live B2B chemicals store, [kaarislabs.com](https://kaarislabs.com). It runs as an isolated Spring Boot microservice using **Spring AI tool calling**, **RAG over COA PDFs**, **output guardrails**, **RabbitMQ re-indexing**, **Kafka chat events** and an **evaluation suite in CI**, and it ships as a Docker image with **Kubernetes manifests and a CI/CD pipeline for AWS**.
 
 **Stack:** Java 21 · Spring Boot · Spring AI · Gemini · Redis (vectors) · RabbitMQ · Kafka · Resilience4j · Bucket4j · Caffeine · SQL Server / MySQL · Docker · Kubernetes · AWS (EC2, RDS, S3, IAM, CloudWatch) · JUnit 5 · Mockito · MockMvc
 
@@ -101,11 +101,97 @@ sequenceDiagram
 
 ---
 
-## Deployment (AWS + Kubernetes)
+## Kafka internals (as used for chat events)
 
-- Docker image → **Kubernetes on EC2**: a Deployment with **liveness/readiness probes** on `/actuator/health` and a **Horizontal Pod Autoscaler**.
-- Database on **RDS**, COA PDFs in **S3**, least-privilege **IAM roles** (no keys in code), logs and alarms in **CloudWatch**.
-- Every secret comes from the environment (`.env.example` lists the names only). The DB login is **read-only** at the database level.
+```
+Producer ──► topic chat.events ──► partition 0 [e0 e1 e2 e3 ...]  ◄── analytics group (offset 3)
+             key = sessionId      partition 1 [e0 e1 e2 ...]      ◄── replay-eval group (offset 1)
+                                  partition 2 [e0 e1 ...]
+```
+
+| Concept | What it means here |
+|---|---|
+| **Topic / partition** | `chat.events` is split into partitions; each partition is an **append-only log** on disk. Partitions are the unit of parallelism. |
+| **Key → partition** | Each event's key is the **sessionId**, so `hash(key) % partitions` puts one conversation in **one partition, in order**. Ordering is guaranteed only *within* a partition. |
+| **Offset** | Each event's position in its partition. A consumer stores *its own* offset, so reading doesn't delete anything. |
+| **Consumer group** | `analytics` and `replay-eval` are separate groups: **each group gets every event**. Inside a group, each partition goes to exactly one consumer. More consumers than partitions → the extra ones sit idle. |
+| **Retention** | Events are kept for a set time (e.g. 7 days) whether read or not, which is what makes **replay** possible: reset a group's offset and re-read. |
+| **Rebalance** | When a consumer joins or dies, partitions are reassigned within the group. |
+| **Replication** | Each partition has a leader + followers on other brokers; with `acks=all` the write is confirmed only when in-sync replicas have it. |
+| **Producer settings** | Async `send()` so a reply is never blocked; `acks=all` + `enable.idempotence=true` so a retry doesn't write the event twice. |
+| **Delivery** | Consumers commit offsets *after* processing → **at-least-once**; consumers are idempotent (event id) so a re-read is harmless. |
+
+**Kafka vs RabbitMQ in one line:** RabbitMQ *deletes* a message once a worker acks it (a task queue); Kafka *keeps* a log that many groups read at their own pace (an event stream).
+
+---
+
+## Deployment: Docker → Kubernetes on AWS
+
+Everything needed is in this repo: [`Dockerfile`](Dockerfile), [`deploy/k8s/`](deploy/k8s) and [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+```mermaid
+flowchart LR
+    DEV[push / PR] --> T[GitHub Actions<br/>./mvnw test]
+    T -->|manual deploy| B[docker build<br/>multi-stage]
+    B --> ECR[(Amazon ECR<br/>image:commit-sha)]
+    ECR --> K[kubectl apply<br/>rolling update]
+    subgraph AWS [AWS · ap-south-1]
+      subgraph EC2 [Kubernetes cluster on EC2]
+        ING[Ingress / Nginx] --> SVC[Service<br/>assistant:80]
+        SVC --> P1[Pod] & P2[Pod] & P3[Pod ...]
+        HPA[HPA 2-6 pods<br/>CPU 70%] -.-> P1
+      end
+      P1 --> RDS[(RDS<br/>catalogue DB)]
+      P1 --> S3[(S3<br/>COA PDFs)]
+      P1 -.logs.-> CW[CloudWatch<br/>logs + alarms]
+    end
+    K --> EC2
+```
+
+### The image ([`Dockerfile`](Dockerfile))
+- **Multi-stage:** a JDK stage builds the JAR; the runtime stage is **JRE only**, running as a **non-root** user.
+- `pom.xml` is copied before the source, so the **dependency layer is cached** until the pom changes.
+- `-XX:MaxRAMPercentage=75` sizes the heap from the **container's memory limit**, not the node's RAM. Without it, the JVM can exceed the limit and get **OOMKilled**.
+- `SERVER_ADDRESS=0.0.0.0`: locally the app binds to `127.0.0.1`, which a container can't receive traffic on.
+
+### Kubernetes objects ([`deploy/k8s/`](deploy/k8s))
+
+| Object | Job | Key settings |
+|---|---|---|
+| **Deployment** | Keeps N identical pods running and rolls out new versions | `replicas: 2`, `RollingUpdate maxUnavailable: 0, maxSurge: 1` |
+| **Startup probe** | Gives the JVM up to 150 s to start before liveness counts | `/actuator/health/liveness`, 30 × 5 s |
+| **Liveness probe** | "Is the process stuck?" Failing → the **kubelet restarts** the container | `/actuator/health/liveness` |
+| **Readiness probe** | "Can it take traffic?" Failing → **removed from the Service**, not restarted | `/actuator/health/readiness` |
+| **Resources** | `requests` = what the scheduler reserves; `limits` = the hard cap | 250m / 512Mi → 1 CPU / 768Mi |
+| **Service** | A stable DNS name + virtual IP that load-balances across **Ready** pods only | `ClusterIP`, port 80 → 8090 |
+| **HPA** | Adds or removes pods based on load | 2–6 pods at 70% CPU, 5-min scale-down window |
+| **ConfigMap / Secret** | Non-secret settings / credentials injected as env vars | Secrets are created on the cluster, never committed |
+| **preStop + grace period** | On shutdown, wait 10 s so the Service stops routing here, then allow 45 s for open SSE replies | avoids cutting off a reply mid-stream |
+
+Spring Boot exposes the `liveness` and `readiness` health groups automatically when it detects Kubernetes (the ConfigMap also turns them on explicitly). Readiness turns **DOWN** while the app is starting or shutting down, so the pod gets no traffic at those moments.
+
+### Rolling update, step by step
+1. A new image tag (the commit SHA) is applied to the Deployment.
+2. Kubernetes starts **one new pod** (`maxSurge: 1`) and keeps every old pod serving (`maxUnavailable: 0`).
+3. Once the new pod's **readiness probe passes**, the Service starts sending it traffic and one old pod is stopped.
+4. Repeat until all pods are new. **No downtime.**
+5. The pipeline waits on `kubectl rollout status`; if the rollout doesn't become healthy in 180 s, it runs **`kubectl rollout undo`** to go back to the previous version.
+
+### AWS pieces
+
+| Service | Role |
+|---|---|
+| **EC2** | Nodes of the Kubernetes cluster (k3s / kubeadm). With **EKS**, AWS would run the control plane instead. |
+| **ECR** | Private Docker registry; images are tagged with the **commit SHA**, so every deploy is traceable and rollback is just the previous tag |
+| **RDS** | Managed database (backups, patching, Multi-AZ); the app uses a **read-only** DB login |
+| **S3** | COA PDFs that the RAG indexer reads |
+| **IAM** | The pipeline gets short-lived credentials through **GitHub OIDC** (no stored access keys); nodes get an **instance role** with least privilege (e.g. read-only on one S3 bucket) |
+| **CloudWatch** | Container logs and **alarms** (e.g. on 5xx rate or pod restarts) |
+
+### CI/CD ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+- **Every push / PR:** `./mvnw test`. DB and eval tests skip themselves when their credentials aren't set, so CI runs the unit and web tests.
+- **Deploy (manual trigger):** `needs: test` → build the image → push to ECR → `kubectl apply` → wait for the rollout → **auto-undo on failure**.
+- All secrets (`AWS_DEPLOY_ROLE_ARN`, `ECR_REGISTRY`, `KUBECONFIG_B64`, app secrets) live in GitHub / cluster secrets, **never in the repo**.
 
 ---
 
@@ -168,6 +254,9 @@ src/main/java/com/kaarislabs/chatbot
 └── common/      InputValidator, InputSanitizer, TextCleaner
 src/main/resources/prompts/system.txt   the system prompt
 src/test/...                            unit, MockMvc and eval tests
+Dockerfile                              multi-stage, non-root image
+deploy/k8s/                             Deployment, Service, HPA, ConfigMap
+.github/workflows/ci.yml                test on every push; manual build → ECR → Kubernetes rollout
 ```
 
 ## Run locally

@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assistant
+  namespace: kaaris
+  labels: { app: assistant }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: assistant }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never drop below the desired count during a rollout
+      maxSurge: 1         # start one new pod, wait until it is Ready, then stop an old one
+  template:
+    metadata:
+      labels: { app: assistant }
+    spec:
+      terminationGracePeriodSeconds: 45   # let in-flight SSE replies finish
+      containers:
+        - name: assistant
+          image: IMAGE_PLACEHOLDER        # replaced by the deploy workflow (ECR image tagged with the commit SHA)
+          ports:
+            - containerPort: 8090
+          envFrom:
+            - configMapRef: { name: assistant-config }
+            - secretRef: { name: assistant-secrets }
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }   # what the scheduler reserves
+            limits:   { cpu: "1",  memory: 768Mi }   # heap = 75% of this (MaxRAMPercentage)
+          startupProbe:                              # JVM + Spring start: up to 30 x 5 s before liveness counts
+            httpGet: { path: /actuator/health/liveness, port: 8090 }
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:                             # failing = the process is stuck -> kubelet restarts the container
+            httpGet: { path: /actuator/health/liveness, port: 8090 }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:                            # failing = not ready for traffic -> removed from the Service, not restarted
+            httpGet: { path: /actuator/health/readiness, port: 8090 }
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:                                 # give the Service time to stop routing here before shutdown
+              exec: { command: ["sleep", "10"] }

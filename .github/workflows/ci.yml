@@ -1,0 +1,58 @@
+name: CI / Deploy
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:          # deploy is started by hand from the Actions tab
+
+permissions:
+  contents: read
+  id-token: write             # lets the deploy job get short-lived AWS credentials through OIDC (no stored keys)
+
+jobs:
+  test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+      # DB and eval tests skip themselves when their credentials are not set
+      - run: ./mvnw -B test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: target/surefire-reports/
+
+  deploy:
+    name: Build image, push to ECR, roll out on Kubernetes
+    needs: test               # nothing deploys unless every test passed
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ secrets.ECR_REGISTRY }}/kaaris-assistant:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-south-1
+      - uses: aws-actions/amazon-ecr-login@v2
+      - run: |
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+      - name: Roll out
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          echo "$KUBECONFIG_DATA" | base64 -d > kubeconfig && export KUBECONFIG=$PWD/kubeconfig
+          kubectl apply -f deploy/k8s/service-hpa-config.yaml
+          sed "s|IMAGE_PLACEHOLDER|$IMAGE|" deploy/k8s/deployment.yaml | kubectl apply -f -
+          kubectl -n kaaris rollout status deployment/assistant --timeout=180s \
+            || { kubectl -n kaaris rollout undo deployment/assistant; exit 1; }

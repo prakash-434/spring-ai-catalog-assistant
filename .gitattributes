@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings, or they fail inside Linux containers and CI
+mvnw text eol=lf
+*.sh text eol=lf
+mvnw.cmd text eol=crlf
