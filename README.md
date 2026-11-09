@@ -135,16 +135,16 @@ flowchart LR
     T -->|"manual deploy"| B["docker build<br/>multi-stage"]
     B --> ECR[("Amazon ECR<br/>image:commit-sha")]
     ECR --> K["kubectl apply<br/>rolling update"]
-    subgraph AWS ["AWS - ap-south-1"]
-      subgraph EC2 ["Kubernetes cluster on EC2"]
-        ING["Ingress / Nginx"] --> SVC["Service<br/>assistant:80"]
-        SVC --> P1["Pod"] & P2["Pod"] & P3["Pod ..."]
-        HPA["HPA 2-6 pods<br/>CPU 70%"] -.-> P1
-      end
-      P1 --> RDS[("RDS<br/>catalogue DB")]
-      P1 --> S3[("S3<br/>COA PDFs")]
-      P1 -.logs.-> CW["CloudWatch<br/>logs + alarms"]
+    subgraph CLUSTER ["AWS ap-south-1 - Kubernetes cluster on EC2"]
+      ING["Ingress"] --> SVC["Service<br/>assistant:80"]
+      SVC --> P1["Pod 1"]
+      SVC --> P2["Pod 2"]
+      SVC --> P3["Pod N"]
+      HPA["HPA 2-6 pods<br/>CPU 70%"] -.-> SVC
     end
+    P1 --> RDS[("RDS<br/>catalogue DB")]
+    P1 --> S3[("S3<br/>COA PDFs")]
+    P1 -.->|"logs"| CW["CloudWatch<br/>logs + alarms"]
     K --> ING
 ```
 
